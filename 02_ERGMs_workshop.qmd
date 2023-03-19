@@ -1,0 +1,234 @@
+---
+title: "ERGM workshop"
+author: "Jono Tuke"
+date: today
+date-format: long
+format: 
+  revealjs: 
+    self-contained: true
+editor_options: 
+  chunk_output_type: console
+execute: 
+  echo: true
+  code-fold: true
+---
+
+# Tobacco control dataset
+
+## Description
+
+Organizational network data collected from the Indiana state tobacco control program in 2010. The network is made up of 25 organizational nodes. 
+
+## Details
+
+The dataset was obtained as part of an evaluation of state tobacco control programs funded by the Centers of Disease Control and Prevention (CDC). A tie exists when two organizations talked to each other about the CDC evidence-based guideline Best Practices for Tobacco Control. 
+
+## Node characteristics:
+
+- `vertex.names` - Organization name
+- `agency_lvl` - Level of agency:
+    - 1 - Local
+    - 2 - State
+    - 3 - National
+- `tob_yrs` - Number of years doing tobacco control
+
+## Libraries
+
+```{r}
+pacman::p_load(
+  tidyverse, igraph, ggraph, 
+  ergm, intergraph, UserNetR, 
+  tidygraph
+)
+```
+
+## Get the data
+
+```{r}
+data("TCnetworks")
+tobacco <- TCnetworks$TCcnt
+```
+
+## Cleaning
+
+1. Convert to tidygraph. 
+2. Get rid of na columns in nodes and edge data-frames. 
+
+## Cleaning
+
+```{r}
+tobacco <- as_tbl_graph(tobacco)
+tobacco <- 
+  tobacco |> 
+  activate(nodes) |> 
+  select(-na) |> 
+  activate(edges) |> 
+  select(-na)
+tobacco
+```
+
+
+## Graph statistics.
+
+Get the following: 
+
+- Number of nodes
+- Number of edges
+- Density
+- Transitivity
+
+## Graph statistics.
+
+```{r}
+vcount(tobacco)
+ecount(tobacco)
+edge_density(tobacco)
+transitivity(tobacco)
+```
+
+
+## Node attributes.
+
+Make this figure. 
+
+```{r}
+#| echo: false
+tobacco |> 
+  activate(nodes) |> 
+  mutate(
+    degree = centrality_degree()
+  ) |> 
+  data.frame() |> 
+  ggplot(aes(tob_yrs, degree)) + 
+  geom_point()
+```
+
+## Node attributes.
+
+```{r}
+#| eval: false
+tobacco |> 
+  activate(nodes) |> 
+  mutate(
+    degree = centrality_degree()
+  ) |> 
+  data.frame() |> 
+  ggplot(aes(tob_yrs, degree)) + 
+  geom_point()
+```
+
+## Visualise network.
+
+```{r}
+#| echo: false
+ggraph(tobacco) + 
+  geom_edge_link() + 
+  geom_node_point(
+    aes(col = factor(agency_lvl), size = tob_yrs)
+  ) + 
+  theme_graph() + 
+  harrypotter::scale_colour_hp_d("Ravenclaw") + 
+  labs(
+    col = "Agency Level", 
+    size = "Number of years doing tobacco control"
+  )
+```
+
+## Visualise network.
+
+```{r}
+#| eval: false
+ggraph(tobacco) + 
+  geom_edge_link() + 
+  geom_node_point(
+    aes(col = factor(agency_lvl), size = tob_yrs)
+  ) + 
+  theme_graph() + 
+  harrypotter::scale_colour_hp_d("Ravenclaw") + 
+  labs(
+    col = "Agency Level", 
+    size = "Number of years doing tobacco control"
+  )
+```
+
+## Null model. 
+
+- Convert `igraph` object to `network` object (`intergraph`).
+- Fit Erdös-Rénji model. 
+- Does the coefficient agree with observed density?
+
+## Null model {.scrollable}
+
+```{r}
+## Null model ----
+tobacco_network  <- asNetwork(tobacco)
+M1  <- ergm(tobacco_network ~ edges)
+summary(M1)
+## Check coef ----
+plogis(coef(M1))
+edge_density(tobacco)
+```
+
+## Model to account for degree
+
+- Produce plots to look at degree of nodes for `agency_lvl` and `tob_yrs`. 
+- Fit models with node degree based on these predictors (`nodecov()` and `nodefactor()`).
+- Compare using AIC.
+
+## Model to account for degree {.smaller .scrollable}
+
+```{r}
+M2  <- ergm(tobacco_network ~ edges +
+              nodecov("tob_yrs"))
+M3  <- ergm(tobacco_network ~ edges +
+              nodefactor("agency_lvl"))
+M4  <- ergm(tobacco_network ~ edges +
+              nodefactor("agency_lvl") +
+              nodecov("tob_yrs"))
+AIC(M1, M2, M3, M4)
+summary(M4)
+```
+
+## Model to account for homophily
+
+Using the model with `tob_yrs`. 
+
+- Fit a model with a homophily term (`nodematch()`).
+- Fit a model with a differential homophily term (`nodematch()`).
+- Which is the best model?
+
+## Model to account for homophily
+
+```{r}
+M5  <- ergm(tobacco_network ~ edges +
+              nodecov('tob_yrs') +
+              nodefactor("agency_lvl") +
+              nodematch("agency_lvl"))
+M6  <- ergm(tobacco_network ~ edges +
+              nodecov('tob_yrs') +
+              nodefactor("agency_lvl") +
+              nodematch("agency_lvl", diff = TRUE))
+AIC(M4, M5, M6)
+```
+
+
+## Prediction
+
+Using the model with `tob_yrs` and non-differential homophily
+
+- Predict the probability of an edge  between two organisations that are both local and the first has been in tobacco for 1 year and the other for 5 years. 
+- Repeat the prediction if one is local and the other is national. 
+
+# Prediction
+
+```{r}
+coef(M5)
+
+# So for the first prediction we have a total of 6 years, no nodes at national or state level and homophilic edge:
+x0  <- c(1, 6, 0, 0, 1)
+plogis(coef(M5) %*% x0)
+
+# In the second prediction, we still have a total of 6 years, but now we have one at national and heterophily:
+x0  <- c(1, 6, 1, 0, 0)
+plogis(coef(M5) %*% x0)
+```

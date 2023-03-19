@@ -1,0 +1,337 @@
+---
+title: "ERGMs"
+author: "Jono Tuke"
+date: today
+date-format: long
+format: 
+  revealjs: 
+    self-contained: true
+editor_options: 
+  chunk_output_type: console
+execute: 
+  echo: true
+---
+
+## Packages 
+
+```{r}
+#| eval: false
+remotes::install_github("DougLuke/UserNetR")
+```
+
+```{r}
+pacman::p_load(tidyverse, ggraph, statnet, igraph, UserNetR, ergm, tidygraph)
+theme_set(theme_bw())
+```
+
+# The data
+
+## Moreno sociogram
+
+- 33 Nodes: students in 4th grade class in 1933 America.
+- 46 Edges: friendship.
+- Metadata: for each node we have gender.
+
+## Summary
+
+```{r}
+data("Moreno")
+Moreno <- as_tbl_graph(Moreno)
+Moreno
+```
+
+## Cleaning - nodes {.scrollable}
+
+```{r}
+Moreno <- 
+  Moreno |> 
+  activate(nodes) |> 
+  mutate(
+    gender = ifelse(
+      gender == 1, "Female", "Male"
+    )
+  ) |> 
+  select(
+    -na
+  )
+Moreno
+```
+
+## Cleaning - edges
+
+```{r}
+Moreno <- 
+  Moreno |> 
+  activate(edges) |> 
+  select(-na)
+Moreno
+```
+
+## Visualization
+
+```{r}
+#| output-location: slide
+ggraph(Moreno) + 
+  geom_edge_link() + 
+  geom_node_point(aes(fill = gender), size = 10, shape = 21) + 
+  theme_graph() + 
+  scale_fill_brewer(palette = "Set1") + 
+  theme(legend.position = "bottom") + 
+  labs(fill = "Gender")
+```
+
+
+# Five number summary of networks
+
+## Size 
+
+The number of nodes, vertices, or actors:
+
+```{r}
+igraph::vcount(Moreno)
+```
+
+## Density
+
+Proportion of observed ties to maximum number of ties:
+
+```{r}
+igraph::edge_density(Moreno)
+```
+
+::: {.notes}
+46 / (choose(33,2))
+:::
+
+## Components
+
+A subgraph in which all actor are connected directly or indirectly: 
+
+```{r}
+igraph::components(Moreno)
+```
+
+
+## Diameter
+
+The diameter then for an entire network is the longest of the shortest paths across all pairs of nodes.
+
+```{r}
+igraph::diameter(Moreno)
+```
+
+## Clustering coef
+
+Transitivity is defined as the proportion of closed triangles (triads where all three ties are observed) to the total number of open and closed triangles (triads where either two or all three ties are observed).
+
+```{r}
+igraph::transitivity(Moreno)
+```
+
+## Clustering
+
+```{r}
+play_erdos_renyi(n = 33, m = 46) |> 
+  igraph::transitivity()
+```
+
+# Modelling networks
+
+## Model 1 Logisitic regression {.smaller .scrollable}
+
+- Distribution:
+
+$$
+Y_{ij} \sim Bern(p_{ij})
+$$
+
+- Linear predictor:
+
+$$
+\eta_{ij} = \boldsymbol{x}^T_{ij}\boldsymbol{\beta}
+$$
+
+- Link function:
+
+$$
+p_{ij} = \frac{e^{\eta_{ij}}}{1 + e^{\eta_{ij}}}
+$$
+
+## Network structures
+
+1. Non-uniform degree distribution
+2. Homophily
+3. Transitivity
+4. Reciprocity
+
+## Exponential random graph models
+
+$$
+P( \boldsymbol{Y} = \boldsymbol{y}) = 
+\frac{1}{\kappa}
+\exp\left(
+\sum_A\eta_Ag_A( \boldsymbol{y})
+\right),
+$$
+where $\eta_A$ is the parameter associated with configurations $A$, and 
+$$
+g_A( \boldsymbol{y}) = \prod_{y_{ij}\in A}y_{ij}
+$$
+
+## Dependency graphs
+
+- Nodes are the tie variables.
+- Edges indicate dependency.
+
+
+## Bernoulli random graphs
+
+```{r}
+#| echo: false
+knitr::include_graphics("figs/bernoulii.png")
+```
+
+
+## Markov random graphs
+
+```{r}
+#| echo: false
+knitr::include_graphics("figs/markov.png")
+```
+
+## Hammersley–Clifford theorem
+
+$$
+P( \boldsymbol{Y} = \boldsymbol{y}) = 
+\frac{1}{\kappa}
+\exp
+\sum_{A \subseteq J^*}\theta_Az_{A}(\boldsymbol{y})
+$$
+where $J^*$ is the set of all cliques in the dependency graph, $\theta_A$ is the parameter associated with the clique (configuration) $A$, and $z_A(\boldsymbol{y})$ is an indicator variable with value 1 if configuration $A$ is in the graph. 
+
+# Application to Moreno dataset
+
+## Null model
+
+```{r}
+Moreno_network <- intergraph::asNetwork(Moreno)
+null <- ergm(Moreno_network ~ edges)
+summary(null)
+```
+
+## Node degree
+
+```{r}
+Moreno <- 
+  Moreno |> 
+  activate(nodes) |> 
+  mutate(
+    degree = centrality_degree()
+  )
+Moreno
+```
+
+## Node degree
+
+```{r}
+#| echo: false
+Moreno |> 
+  activate(nodes) |> 
+  data.frame() |> 
+  count(gender, degree) |> 
+  group_by(gender) |> 
+  mutate(
+    N = sum(n),
+    prop = n / N
+  ) |> 
+  ggplot(aes(degree, prop, fill = gender)) + 
+  geom_col(position = "dodge", col = "black") + 
+  harrypotter::scale_fill_hp_d("Ravenclaw")
+
+```
+
+## Node factor
+
+```{r}
+gender <- ergm(Moreno_network ~ edges + nodefactor('gender'))
+summary(gender)
+```
+
+## Homophily
+
+```{r}
+Moreno |> 
+  activate(edges) |> 
+  mutate(agreement = .N()$gender[from] == .N()$gender[to]) |> 
+  data.frame() |> 
+  count(agreement)
+```
+
+
+## Homophily
+
+```{r}
+homophily <- ergm(Moreno_network ~ edges + nodematch('gender'))
+summary(homophily)
+```
+
+## Differential homophily
+
+```{r}
+#| output-location: slide
+diff_homo <- ergm(Moreno_network ~ edges + 
+                    nodematch('gender',diff = TRUE)
+)
+summary(diff_homo)
+```
+
+## Transitivity
+
+```{r}
+#| output-location: slide
+#| layout-ncol: 2
+hom.gof <- gof(homophily,GOF = ~ degree + triadcensus - model)
+plot(hom.gof)
+```
+
+## Transitivity
+
+```{r}
+hom.gof
+```
+
+## Compare models
+```{r}
+AIC(null, gender, homophily, diff_homo)
+```
+
+## Simulate models
+
+```{r}
+set.seed(2023)
+sim  <- simulate(homophily)
+```
+
+## Simulated models
+
+```{r}
+#| layout-ncol: 2
+#| echo: false
+#| fig-cap: 
+#|  - original data
+#|  - simulated data
+ggraph(Moreno) + 
+  geom_edge_link() + 
+  geom_node_point(aes(fill = gender), size = 10, shape = 21) + 
+  theme_graph(base_family="sans") + 
+  scale_fill_brewer(palette = "Set1") + 
+  theme(legend.position = "bottom") + 
+  labs(fill = "Gender")
+ggraph(sim) + geom_edge_link() + 
+  geom_node_point(aes(fill = gender), size = 10, shape = 21) + 
+  theme_graph(base_family="sans") + 
+  scale_fill_brewer(palette = "Set1") + 
+  theme(legend.position = "bottom") + 
+  labs(fill = "Gender")
+```
+
